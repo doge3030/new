@@ -1,0 +1,1080 @@
+
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Banana Hunt - Single File</title>
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 via CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <!-- Babel Standalone for JSX in the browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Firebase (compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.3/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.3/firebase-firestore-compat.js"></script>
+
+  <style>
+    html, body, #root { height: 100%; }
+    body { margin: 0; background: #0b1020; }
+  
+              @keyframes pulse {
+                0%, 100% { transform: scale(1); filter: drop-shadow(0 0 10px rgba(245,158,11,0.8)) drop-shadow(0 0 20px rgba(255,200,50,0.6)); }
+                50% { transform: scale(1.1); filter: drop-shadow(0 0 15px rgba(245,158,11,1)) drop-shadow(0 0 30px rgba(255,220,100,0.8)); }
+              }
+    
+</style>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+  // --- Firebase Init (fill with your own keys from Firebase Console) ---
+  const firebaseConfig = {
+  apiKey: "AIzaSyAMBuwkPxQj0XBmMGlS_pgVYbONCHkY_F4",
+  authDomain: "monkey-e83d1.firebaseapp.com",
+  projectId: "monkey-e83d1",
+  storageBucket: "monkey-e83d1.firebasestorage.app",
+  messagingSenderId: "572963805959",
+  appId: "1:572963805959:web:94ba27f79554b7523f03a2",
+  measurementId: "G-80EN53F5WX"
+};
+  if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+  }
+  const db = firebase.firestore();
+</script>
+
+<script type="text/babel" data-presets="react">
+    const { useState, useEffect, useCallback } = React;
+
+    const MouseHuntGame = () => {
+      const [gameState, setGameState] = useState('characterSelect'); // Start with character selection
+      const [selectedMonkey, setSelectedMonkey] = useState(1);
+      const [score, setScore] = useState(0);
+      const [cheeseScore, setCheeseScore] = useState(0);
+      const [mouseY, setMouseY] = useState(300);
+      const [mouseVelocity, setMouseVelocity] = useState(0);
+      const [obstacles, setObstacles] = useState([]);
+      const [cheeses, setCheeses] = useState([]);
+      const [clouds, setClouds] = useState([]);
+      const [difficultyLevel, setDifficultyLevel] = useState(1);
+      
+      // Score submission
+      const [showScoreForm, setShowScoreForm] = useState(false);
+      const [finalScore, setFinalScore] = useState(0);
+      const [finalCheeseScore, setFinalCheeseScore] = useState(0);
+      const [finalLevel, setFinalLevel] = useState(1);
+      const [userBitcoinAddress, setUserBitcoinAddress] = useState('');
+      const [userTwitterHandle, setUserTwitterHandle] = useState('');
+      const [leaderboard, setLeaderboard] = useState([]);
+      const [showLeaderboard, setShowLeaderboard] = useState(false);
+      const [pipeColorIndex, setPipeColorIndex] = useState(0);
+
+      // --- Firebase helpers ---
+      const saveScoreToFirebase = async (entry) => {
+        try {
+          await db.collection('leaderboard').add({
+            totalScore: entry.totalScore,
+            engelScore: entry.engelScore,
+            cheeseScore: entry.cheeseScore,
+            level: entry.level,
+            bitcoinAddress: entry.bitcoinAddress,
+            twitterHandle: entry.twitterHandle,
+            createdAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          return true;
+        } catch (e) {
+          console.error('Firebase save error:', e);
+          return false;
+        }
+      };
+
+      const fetchLeaderboardFromFirebase = async () => {
+        try {
+          const snap = await db.collection('leaderboard')
+            .orderBy('totalScore', 'desc')
+            .limit(10)
+            .get();
+          const rows = snap.docs.map(d => d.data());
+          setLeaderboard(rows);
+        } catch (e) {
+          console.error('Firebase fetch error:', e);
+        }
+      };
+
+      const GRAVITY = 0.6;
+      const JUMP_FORCE = -9;
+      const MOUSE_SIZE = 40;
+      const OBSTACLE_WIDTH = 80;
+      
+      // Color palettes for 3D pipes at different levels
+      const pipeColors = [
+        // Level 1 - Green
+        { main: '#4b5563', secondary: '#6b7280', border: '#374151', cap: '#9ca3af', light: '#d1d5db', shadow: '#1f2937' },
+        // Level 2 - Red  
+        { main: '#991b1b', secondary: '#dc2626', border: '#7f1d1d', cap: '#ef4444', light: '#f87171', shadow: '#450a0a' },
+        // Level 3 - Blue
+        { main: '#1e3a8a', secondary: '#2563eb', border: '#1e40af', cap: '#3b82f6', light: '#60a5fa', shadow: '#1e293b' },
+        // Level 4 - Purple
+        { main: '#6b21a8', secondary: '#9333ea', border: '#581c87', cap: '#a855f7', light: '#c084fc', shadow: '#3b0764' },
+        // Level 5 - Orange
+        { main: '#c2410c', secondary: '#ea580c', border: '#9a3412', cap: '#f97316', light: '#fb923c', shadow: '#7c2d12' },
+        // Level 6 - Pink
+        { main: '#be185d', secondary: '#e91e63', border: '#9d174d', cap: '#f472b6', light: '#f9a8d4', shadow: '#831843' },
+        // Level 7 - Teal
+        { main: '#0f766e', secondary: '#14b8a6', border: '#134e4a', cap: '#2dd4bf', light: '#5eead4', shadow: '#042f2e' },
+        // Level 8 - Yellow
+        { main: '#a16207', secondary: '#ca8a04', border: '#854d0e', cap: '#eab308', light: '#facc15', shadow: '#713f12' },
+        // Level 9 - Indigo
+        { main: '#3730a3', secondary: '#4f46e5', border: '#312e81', cap: '#6366f1', light: '#a78bfa', shadow: '#1e1b4b' },
+        // Level 10 - Dark Red
+        { main: '#7f1d1d', secondary: '#b91c1c', border: '#450a0a', cap: '#dc2626', light: '#f87171', shadow: '#220808' }
+      ];
+
+      // Sprite manifest data - simulating assets/manifest.json
+      const spriteManifest = {
+        "version": 1,
+        "sprites": [
+          {
+            "id": "monkey_classic",
+            "file": "monkey_classic.png",
+            "w": 512, "h": 512,
+            "pivot": { "x": 0.5, "y": 0.9 },
+            "hitbox": { "x": 0.28, "y": 0.35, "w": 0.44, "h": 0.55 },
+            "tags": ["", "monkey", "neutral", "classic"],
+            "desc": "art classic flying monkey, no gear."
+          },
+          {
+            "id": "monkey_cyber",
+            "file": "monkey_cyber.png",
+            "w": 512, "h": 512,
+            "pivot": { "x": 0.5, "y": 0.9 },
+            "hitbox": { "x": 0.25, "y": 0.32, "w": 0.50, "h": 0.58 },
+            "tags": ["", "monkey", "helmet", "tech", "blue"],
+            "desc": "art cyber-suit monkey with visor."
+          },
+          {
+            "id": "monkey_cool",
+            "file": "monkey_cool.png",
+            "w": 512, "h": 512,
+            "pivot": { "x": 0.5, "y": 0.9 },
+            "hitbox": { "x": 0.26, "y": 0.34, "w": 0.48, "h": 0.56 },
+            "tags": ["", "monkey", "sunglasses", "blue-shirt", "chain"],
+            "desc": "art monkey with sunglasses, blue tee, gold chain."
+          },
+          {
+            "id": "monkey_alien",
+            "file": "monkey_alien.png",
+            "w": 512, "h": 512,
+            "pivot": { "x": 0.5, "y": 0.9 },
+            "hitbox": { "x": 0.26, "y": 0.34, "w": 0.48, "h": 0.56 },
+            "tags": ["", "monkey", "alien", "green", "antenna", "sunglasses"],
+            "desc": "Green alien-monkey with antennae and sunglasses."
+          }
+        ]
+      };
+
+      // perfect monkey designs based on provided sprite images
+      // --- IMAGE-BASED MONKEY SPRITES (from Postimages URLs) ---
+      const imgStyle = {
+        width: '64px',
+        height: '64px',
+        imageRendering: 'crisp-edges',
+        filter: 'drop-shadow(2px 2px 6px rgba(0,0,0,0.4))'
+      };
+
+      const monkeyDesigns = {
+        1: {
+          id: 'monkey_classic',
+          manifest: spriteManifest.sprites[0],
+          render: () => (
+            <img
+              src="https://i.postimg.cc/HVswXvVg/Chat-GPT-Image-27-Ag-u-2025-02-10-37.png"
+              alt="Classic Monkey"
+              style={imgStyle}
+            />
+          )
+        },
+        2: {
+          id: 'monkey_cyber',
+          manifest: spriteManifest.sprites[1],
+          render: () => (
+            <img
+              src="https://i.postimg.cc/5XD8cxp4/Chat-GPT-Image-27-Ag-u-2025-02-26-03.png"
+              alt="Cool Monkey"
+              style={imgStyle}
+            />
+          )
+        },
+        3: {
+          id: 'monkey_cool',
+          manifest: spriteManifest.sprites[2],
+          render: () => (
+            <img
+              src="https://i.postimg.cc/mtXQw3HF/Chat-GPT-Image-27-Ag-u-2025-02-16-10.png"
+              alt="Cyber Monkey"
+              style={imgStyle}
+            />
+          )
+        },
+        4: {
+          id: 'monkey_alien',
+          manifest: spriteManifest.sprites[3],
+          render: () => (
+            <img
+              src="https://i.postimg.cc/RWWwb37p/Chat-GPT-Image-27-Ag-u-2025-02-33-08.png"
+              alt="Alien Monkey"
+              style={imgStyle}
+            />
+          )
+        }
+      };
+
+      const getGameSpeed = () => {
+  if (difficultyLevel >= 10) {
+    return 3 + (difficultyLevel - 1) * 0.6; // slightly easier than before at lvl 10+
+  }
+  return 3 + (difficultyLevel - 1) * 0.5;
+};
+      const getObstacleGap = () => {
+  if (difficultyLevel >= 10) {
+    return Math.max(150, 200 - (difficultyLevel - 1) * 12); // wider gaps for lvl 10+
+  }
+  return Math.max(160, 200 - (difficultyLevel - 1) * 10);
+};
+
+      // Create 3D multi-part cloud
+      const createCloud = () => {
+        const cloudParts = [];
+        const baseX = 850;
+        const baseY = 20 + Math.random() * 120;
+        const speed = 0.8 + Math.random() * 1.2;
+        
+        // Main cloud body (center) - 3D
+        cloudParts.push({ x: 0, y: 0, width: 24, height: 16, depth: 8 });
+        
+        // Random additional parts with 3D depth
+        if (Math.random() > 0.4) cloudParts.push({ x: -12, y: 4, width: 18, height: 12, depth: 6 });
+        if (Math.random() > 0.4) cloudParts.push({ x: 20, y: 2, width: 16, height: 14, depth: 7 });
+        if (Math.random() > 0.5) cloudParts.push({ x: 6, y: -6, width: 14, height: 10, depth: 5 });
+        if (Math.random() > 0.6) cloudParts.push({ x: -8, y: -4, width: 12, height: 8, depth: 4 });
+        if (Math.random() > 0.7) cloudParts.push({ x: 8, y: 12, width: 10, height: 6, depth: 3 });
+        
+        return {
+          x: baseX,
+          y: baseY,
+          speed: speed,
+          parts: cloudParts,
+          opacity: 0.8 + Math.random() * 0.15
+        };
+      };
+
+      const addToLeaderboard = async (engelScore, cheeseScoreParam, levelParam, bitcoinAddr, twitterHandle) => {
+        const totalScore = engelScore + cheeseScoreParam;
+        const newEntry = {
+          totalScore,
+          engelScore,
+          cheeseScore: cheeseScoreParam,
+          level: levelParam,
+          bitcoinAddress: bitcoinAddr,
+          twitterHandle: twitterHandle,
+          date: new Date().toLocaleDateString('tr-TR')
+        };
+        
+        // Save to Firebase then refresh from server
+        const ok = await saveScoreToFirebase(newEntry);
+        await fetchLeaderboardFromFirebase();
+      };
+
+      const initGame = () => {
+        setGameState('playing');
+        setScore(0);
+        setCheeseScore(0);
+        setDifficultyLevel(1);
+        setPipeColorIndex(0); // Reset to green pipes
+        setMouseY(300);
+        setMouseVelocity(0);
+        setObstacles([]);
+        setCheeses([]);
+        setClouds([]);
+        setShowLeaderboard(false);
+        setShowScoreForm(false);
+        
+        // Add initial 3D clouds
+        const initialClouds = [];
+        for (let i = 0; i < 3; i++) {
+          const cloud = createCloud();
+          cloud.x = 300 + i * 400;
+          initialClouds.push(cloud);
+        }
+        setClouds(initialClouds);
+      };
+
+      const jump = useCallback(() => {
+        if (gameState === 'waiting') {
+          initGame();
+        } else if (gameState === 'playing') {
+          setMouseVelocity(JUMP_FORCE);
+        } else if (gameState === 'gameOver') {
+          initGame();
+        }
+      }, [gameState]);
+
+      useEffect(() => {
+        const handleKeyPress = (e) => {
+          if (e.code === 'Space' || e.code === 'ArrowUp') {
+            e.preventDefault();
+            if (!showScoreForm && gameState !== 'characterSelect') {
+              jump();
+            }
+          }
+        };
+        window.addEventListener('keydown', handleKeyPress);
+        return () => window.removeEventListener('keydown', handleKeyPress);
+      }, [jump, showScoreForm, gameState]);
+
+
+      useEffect(() => {
+        fetchLeaderboardFromFirebase();
+      }, []);
+
+
+      useEffect(() => {
+        if (gameState !== 'playing') return;
+
+        const gameLoop = setInterval(() => {
+          // Update difficulty
+          const totalScore = score + cheeseScore;
+          const newDifficultyLevel = Math.min(10, Math.floor(totalScore / 25) + 1);
+          if (newDifficultyLevel !== difficultyLevel) {
+            setDifficultyLevel(newDifficultyLevel);
+            // Change pipe color when level changes
+            const newColorIndex = (newDifficultyLevel - 1) % pipeColors.length;
+            setPipeColorIndex(newColorIndex);
+          }
+
+          const currentGameSpeed = getGameSpeed();
+          const currentObstacleGap = getObstacleGap();
+
+          setMouseVelocity(prev => prev + GRAVITY);
+          setMouseY(prev => {
+            const newY = prev + mouseVelocity;
+            if (newY > 560 || newY < 0) {
+              setFinalScore(score);
+              setFinalCheeseScore(cheeseScore);
+              setFinalLevel(difficultyLevel);
+              setShowScoreForm(true);
+              setGameState('gameOver');
+              return prev;
+            }
+            return newY;
+          });
+
+          setObstacles(prev => {
+            let newObstacles = prev.map(obstacle => ({
+              ...obstacle,
+              x: obstacle.x - currentGameSpeed
+            })).filter(obstacle => obstacle.x > -OBSTACLE_WIDTH);
+
+            if (newObstacles.length === 0 || newObstacles[newObstacles.length - 1].x < 400) {
+              const gapTop = 100 + Math.random() * 200;
+              newObstacles.push({
+                x: 800,
+                gapTop: gapTop,
+                gapBottom: gapTop + currentObstacleGap,
+                passed: false
+              });
+            }
+
+            newObstacles.forEach(obstacle => {
+              const mouseLeft = 100;
+              const mouseRight = mouseLeft + MOUSE_SIZE;
+              const mouseTop = mouseY;
+              const mouseBottom = mouseY + MOUSE_SIZE;
+
+              // Use hitbox data from manifest for more accurate collision
+              const currentMonkey = monkeyDesigns[selectedMonkey];
+              const hitbox = currentMonkey.manifest.hitbox;
+              const adjustedLeft = mouseLeft + (MOUSE_SIZE * hitbox.x);
+              const adjustedRight = mouseLeft + (MOUSE_SIZE * (hitbox.x + hitbox.w));
+              const adjustedTop = mouseY + (MOUSE_SIZE * hitbox.y);
+              const adjustedBottom = mouseY + (MOUSE_SIZE * (hitbox.y + hitbox.h));
+
+              if (adjustedRight > obstacle.x && adjustedLeft < obstacle.x + OBSTACLE_WIDTH) {
+                if (adjustedTop < obstacle.gapTop || adjustedBottom > obstacle.gapBottom) {
+                  setFinalScore(score);
+                  setFinalCheeseScore(cheeseScore);
+                  setFinalLevel(difficultyLevel);
+                  setShowScoreForm(true);
+                  setGameState('gameOver');
+                }
+              }
+
+              if (!obstacle.passed && obstacle.x + OBSTACLE_WIDTH < 100) {
+                obstacle.passed = true;
+                setScore(prev => prev + 1);
+              }
+            });
+
+            return newObstacles;
+          });
+
+          setCheeses(prev => {
+            let newCheeses = prev.map(cheese => ({
+              ...cheese,
+              x: cheese.x - currentGameSpeed
+            })).filter(cheese => cheese.x > -30);
+
+            if (Math.random() < 0.02) {
+              newCheeses.push({
+                x: 800,
+                y: 50 + Math.random() * 500,
+                collected: false,
+                isTrap: Math.random() < 0.3
+              });
+            }
+
+            newCheeses.forEach(cheese => {
+              if (!cheese.collected) {
+                const mouseLeft = 100;
+                const mouseRight = mouseLeft + MOUSE_SIZE;
+                const mouseTop = mouseY;
+                const mouseBottom = mouseY + MOUSE_SIZE;
+
+                if (mouseRight > cheese.x && mouseLeft < cheese.x + 24 &&
+                    mouseBottom > cheese.y && mouseTop < cheese.y + 24) {
+                  cheese.collected = true;
+                  setCheeseScore(prev => prev + 1);
+                }
+              }
+            });
+
+            return newCheeses;
+          });
+
+          // Update 3D clouds
+          setClouds(prev => {
+            let newClouds = prev.map(cloud => ({
+              ...cloud,
+              x: cloud.x - cloud.speed
+            })).filter(cloud => cloud.x > -150);
+
+            // Add new 3D cloud randomly
+            if (Math.random() < 0.008) {
+              newClouds.push(createCloud());
+            }
+
+            return newClouds;
+          });
+
+        }, 16);
+
+        return () => clearInterval(gameLoop);
+      }, [gameState, mouseVelocity, mouseY, score, cheeseScore, difficultyLevel]);
+
+      const handleScoreSubmit = async () => {
+        const btcAddr = userBitcoinAddress.trim() || 'Not Provided';
+        const twitterUser = userTwitterHandle.trim() || 'Not Provided';
+        
+        await addToLeaderboard(finalScore, finalCheeseScore, finalLevel, btcAddr, twitterUser);
+        setShowScoreForm(false);
+        setShowLeaderboard(true);
+        setGameState('waiting');
+        setUserBitcoinAddress('');
+        setUserTwitterHandle('');
+      };
+
+      const handleSkipSubmission = async () => {
+        await addToLeaderboard(finalScore, finalCheeseScore, finalLevel, 'Anonymous', 'Anonymous');
+        setShowScoreForm(false);
+        setShowLeaderboard(true);
+        setGameState('waiting');
+        setUserBitcoinAddress('');
+        setUserTwitterHandle('');
+      };
+
+      const goToCharacterSelect = () => {
+        // Reset all game states first
+        setShowScoreForm(false);
+        setShowLeaderboard(false);
+        setScore(0);
+        setCheeseScore(0);
+        setDifficultyLevel(1);
+        setPipeColorIndex(0);
+        setMouseY(300);
+        setMouseVelocity(0);
+        setObstacles([]);
+        setCheeses([]);
+        setClouds([]);
+        // Then go to character select
+        setGameState('characterSelect');
+      };
+
+      const selectCharacter = (monkeyId) => {
+        setSelectedMonkey(monkeyId);
+        setGameState('waiting');
+      };
+
+      return (
+        <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-br from-orange-950 via-orange-900 to-yellow-950 p-4" style={{fontFamily: 'monospace'}}>
+          <style>
+            {`
+              @keyframes blink { 
+                0%, 50% { opacity: 1; } 
+                51%, 100% { opacity: 0; } 
+              }
+              @keyframes float { 
+                0%, 100% { transform: translateY(0px); } 
+                50% { transform: translateY(-10px); } 
+              }
+              @keyframes glow { 
+  0%, 100% { box-shadow: 0 0 10px rgba(245,158,11,0.5); } 
+  50% { box-shadow: 0 0 25px rgba(245,158,11,0.8), 0 0 35px rgba(245,158,11,0.6); } 
+} 
+                50% { box-shadow: 0 0 25px rgba(0,255,255,0.8), 0 0 35px rgba(0,255,255,0.6); } 
+              }
+            `}
+          </style>
+          
+          <div className="relative w-full max-w-4xl">
+            {/* 3D Header */}
+            {gameState !== 'characterSelect' && (
+              <div className="flex justify-between items-center mb-4 text-lg font-bold text-orange-400 p-4 rounded-lg" 
+                   style={{
+                     background: 'linear-gradient(135deg, rgba(0,0,0,0.8) 0%, rgba(20,20,20,0.9) 100%)',
+                     border: '2px solid #f59e0b',
+                     boxShadow: '0 8px 32px rgba(245,158,11,0.2), inset 0 2px 8px rgba(255,255,255,0.1)',
+                     backdropFilter: 'blur(10px)'
+                   }}>
+                <div className="flex space-x-4">
+                  <div className="text-orange-400 px-3 py-1 bg-orange-900 bg-opacity-40 rounded-lg backdrop-blur">SCORE: {String(score).padStart(3, '0')}</div>
+                  <div className="text-amber-400 px-3 py-1 bg-amber-900 bg-opacity-40 rounded-lg backdrop-blur">BANANA: {String(cheeseScore).padStart(3, '0')}</div>
+                  <div className="text-orange-500 px-3 py-1 bg-orange-900 bg-opacity-40 rounded-lg backdrop-blur">TOTAL: {String(score + cheeseScore).padStart(3, '0')}</div>
+                  <div className="text-orange-300 px-3 py-1 bg-orange-800 bg-opacity-40 rounded-lg backdrop-blur">LVL: {difficultyLevel}</div>
+                </div>
+                <div className="flex space-x-2">
+                  <button 
+                    onClick={() => setShowLeaderboard(!showLeaderboard)}
+                    className="px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 rounded-lg border border-amber-300 text-amber-100 text-sm font-bold shadow-lg transform hover:scale-105 transition-all duration-200"
+                    style={{ boxShadow: '0 4px 15px rgba(245, 158, 11, 0.4)' }}
+                  >
+                    {showLeaderboard ? 'BACK TO GAME' : 'LEADERBOARD'}
+                  </button>
+                  <button
+                    onClick={goToCharacterSelect}
+                    className="px-4 py-2 bg-gradient-to-r from-yellow-500 to-amber-500 hover:from-yellow-400 hover:to-amber-400 rounded-lg border border-yellow-300 text-yellow-100 text-sm font-bold shadow-lg transform hover:scale-105 transition-all duration-200"
+                  >
+                    CHOOSE CHARACTER
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Character Selection Screen - 3D Enhanced */}
+            {gameState === 'characterSelect' && (
+              <div className="relative w-full rounded-2xl overflow-hidden" style={{ 
+                height: '600px',
+                background: 'linear-gradient(135deg, #7c2d12 0%, #9a3412 40%, #3a1f00 100%)',
+                border: '4px solid #ffd700',
+                boxShadow: '0 20px 60px rgba(255,215,0,0.4), inset 0 4px 20px rgba(255,255,255,0.2)',
+                backdropFilter: 'blur(20px)',
+                transform: 'perspective(1000px) rotateX(2deg)',
+              }}>
+                <div className="text-center text-amber-400 mb-8 pt-8">
+                  <h2 className="text-4xl font-bold mb-4 drop-shadow-2xl" 
+                      style={{ 
+                        textShadow: '0 0 20px rgba(255,215,0,0.8), 2px 2px 4px rgba(0,0,0,0.8)',
+                        animation: 'glow 2s ease-in-out infinite'
+                      }}>
+                    CHOOSE MONKEY
+                  </h2>
+                  <p className="text-xl drop-shadow-lg">Which monkey do you want to play with?</p>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-8 max-w-2xl mx-auto px-8">
+                  {Object.entries(monkeyDesigns).map(([id, design]) => (
+                    <button
+                      key={id}
+                      onClick={() => selectCharacter(parseInt(id))}
+                      className="flex flex-col items-center justify-center p-8 rounded-2xl transition-all duration-300 transform hover:scale-110 hover:-translate-y-4"
+                      style={{ 
+                        background: 'linear-gradient(135deg, rgba(0,0,0,0.6) 0%, rgba(20,20,20,0.8) 100%)',
+                        border: '3px solid #f59e0b',
+                        minHeight: '140px',
+                        boxShadow: '0 10px 30px rgba(0,0,0,0.4), inset 0 2px 10px rgba(255,255,255,0.1)',
+                        backdropFilter: 'blur(10px)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.borderColor = '#ffd700';
+                        e.currentTarget.style.boxShadow = '0 15px 40px rgba(255,215,0,0.4), inset 0 2px 15px rgba(255,255,255,0.2)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.borderColor = '#f59e0b';
+                        e.currentTarget.style.boxShadow = '0 10px 30px rgba(0,0,0,0.4), inset 0 2px 10px rgba(255,255,255,0.1)';
+                      }}
+                    >
+                      <div className="mb-4 transform scale-125" style={{ animation: 'float 3s ease-in-out infinite' }}>
+                        {design.render()}
+                      </div>
+                      <div className="text-orange-300 font-bold text-sm drop-shadow-lg">
+                        {id === '1' && 'RADTARDED MONKEY'}
+                        {id === '2' && 'COOL MONKEY'}
+                        {id === '3' && 'CYBER MONKEY'}
+                        {id === '4' && 'ALIEN MONKEY'}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                
+                <div className="text-center mt-8 text-orange-300">
+                  <p className="text-lg drop-shadow-lg">Choose one and enter the world!</p>
+                </div>
+              </div>
+            )}
+
+            {/* 3D Game Area */}
+            {gameState !== 'characterSelect' && (
+              <>
+                {showLeaderboard ? (
+                  <div className="relative w-full rounded-2xl p-8 overflow-y-auto" style={{ 
+                    height: '600px',
+                    background: 'linear-gradient(135deg, rgba(0,0,0,0.9) 0%, rgba(20,20,20,0.95) 100%)',
+                    border: '4px solid #f59e0b',
+                    boxShadow: '0 20px 60px rgba(245,158,11,0.3), inset 0 4px 20px rgba(255,255,255,0.1)',
+                    backdropFilter: 'blur(20px)'
+                  }}>
+                    <div className="text-center text-orange-400 mb-8">
+                      <h2 className="text-4xl font-bold mb-4 drop-shadow-2xl" 
+                          style={{ 
+                            textShadow: '0 0 20px rgba(245,158,11,0.9), 2px 2px 4px rgba(0,0,0,0.8)',
+                            animation: 'glow 2s ease-in-out infinite'
+                          }}>
+                        LEADERBOARD
+                      </h2>
+                    </div>
+                    
+                    {leaderboard.length === 0 ? (
+                      <div className="text-center text-orange-500 mt-32">
+                        <div className="text-8xl mb-6 drop-shadow-2xl" style={{ animation: 'float 3s ease-in-out infinite' }}>🐵</div>
+                        <p className="text-2xl drop-shadow-lg">NO SCORE YET!</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {leaderboard.map((entry, index) => (
+                          <div key={index} className="flex justify-between items-center p-4 rounded-2xl transition-all duration-300 transform hover:scale-105"
+                               style={{
+                                 background: 'linear-gradient(135deg, rgba(0,255,136,0.1) 0%, rgba(34,197,94,0.2) 100%)',
+                                 border: '2px solid rgba(245,158,11,0.3)',
+                                 boxShadow: '0 8px 25px rgba(0,255,136,0.15), inset 0 2px 8px rgba(255,255,255,0.1)',
+                                 backdropFilter: 'blur(10px)'
+                               }}>
+                            <div className="flex items-center space-x-6">
+                              <div className="text-amber-400 font-bold text-xl px-3 py-1 rounded-lg bg-amber-900 bg-opacity-40">
+                                {index + 1}.
+                              </div>
+                              <div className="text-orange-300">
+                                <div className="text-lg font-semibold">TOTAL: {entry.totalScore} | OBSTACLE: {entry.engelScore} | BANANA: {entry.cheeseScore} | LVL: {entry.level}</div>
+                                <div className="text-sm opacity-80 mt-1">₿: {entry.bitcoinAddress.length > 10 ? `${entry.bitcoinAddress.slice(0, 8)}...` : entry.bitcoinAddress} | @{entry.twitterHandle}</div>
+                              </div>
+                            </div>
+                            <div className="text-gray-300 text-sm bg-gray-900 bg-opacity-40 px-3 py-1 rounded-lg">{entry.date}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div 
+                    className="relative w-full rounded-2xl overflow-hidden cursor-pointer"
+                    style={{ 
+                      height: '600px', 
+                      background: 'linear-gradient(to bottom, #FFB347 0%, #FF8008 40%, #6B2E0B 100%)',
+                      border: '4px solid #2c3e50',
+                      boxShadow: '0 20px 60px rgba(44,62,80,0.4), inset 0 4px 20px rgba(255,255,255,0.1)',
+                      transform: 'perspective(1000px)',
+                      transformStyle: 'preserve-3d'
+                    }}
+                    onClick={() => {
+                      if (!showScoreForm) {
+                        jump();
+                      }
+                    }}
+                  >
+                    {/* 3D Dynamic Clouds */}
+                    {clouds.map((cloud, cloudIndex) => (
+                      <div key={cloudIndex} className="absolute" style={{ left: `${cloud.x}px`, top: `${cloud.y}px` }}>
+                        {cloud.parts.map((part, partIndex) => (
+                          <div
+                            key={partIndex}
+                            className="absolute rounded-full"
+                            style={{
+                              left: `${part.x}px`,
+                              top: `${part.y}px`,
+                              width: `${part.width}px`,
+                              height: `${part.height}px`,
+                              background: 'linear-gradient(135deg, #FFFFFF 0%, #F0F8FF 50%, #E6F3FF 100%)',
+                              opacity: cloud.opacity,
+                              boxShadow: `inset -2px -2px 6px rgba(0,0,0,0.1), 2px 2px 8px rgba(0,0,0,0.2), 0 0 15px rgba(255,255,255,0.3)`,
+                              transform: `perspective(100px) translateZ(${part.depth}px)`,
+                              filter: 'none'
+                            }}
+                          ></div>
+                        ))}
+                      </div>
+                    ))}
+
+                    {/* 3D Ground */}
+                    <div className="absolute bottom-0 w-full h-12 rounded-t-3xl" style={{
+                      background: 'linear-gradient(180deg, #228B22 0%, #006400 50%, #004400 100%)',
+                      border: '3px solid #006400',
+                      boxShadow: 'inset 0 6px 20px rgba(0,100,0,0.3), 0 -10px 30px rgba(34,139,34,0.4)',
+                      transform: 'perspective(500px) rotateX(60deg) translateZ(10px)'
+                    }}>
+                      {/* 3D grass elements */}
+                      {[...Array(15)].map((_, i) => (
+                        <div key={i} 
+                             className="absolute rounded-full"
+                             style={{
+                               width: '4px', 
+                               height: '8px', 
+                               background: 'linear-gradient(180deg, #32CD32 0%, #228B22 100%)', 
+                               top: '-6px', 
+                               left: `${(i * 50) + (Math.random() * 20)}px`,
+                               boxShadow: '1px 1px 3px rgba(0,0,0,0.3)',
+                               transform: `perspective(50px) rotateX(-30deg) translateZ(${Math.random() * 5}px)`
+                             }}
+                        ></div>
+                      ))}
+                    </div>
+
+                    {/* Selected Monkey Character */}
+                    <div 
+                      className="absolute z-20"
+                      style={{
+                        left: '100px',
+                        top: `${mouseY}px`,
+                        transform: `rotate(${Math.min(Math.max(mouseVelocity * 3, -30), 30)}deg)`,
+                        filter: 'drop-shadow(3px 3px 8px rgba(0,0,0,0.4))'
+                      }}
+                    >
+                      {monkeyDesigns[selectedMonkey].render()}
+                    </div>
+
+                    {/* 3D Style Obstacles (Pipes) */}
+                    {obstacles.map((obstacle, index) => {
+                      const currentColor = pipeColors[pipeColorIndex];
+                      return (
+                        <div key={index}>
+                          {/* Top 3D Pipe */}
+                          <div 
+                            className="absolute rounded-b-3xl"
+                            style={{
+                              left: `${obstacle.x}px`,
+                              top: '0px',
+                              width: `${OBSTACLE_WIDTH}px`,
+                              height: `${obstacle.gapTop}px`,
+                              background: `linear-gradient(135deg, ${currentColor.light} 0%, ${currentColor.main} 40%, ${currentColor.secondary} 70%, ${currentColor.shadow} 100%)`,
+                              border: `4px solid ${currentColor.border}`,
+                              boxShadow: `inset -8px -4px 20px rgba(0,0,0,0.3), inset 4px 4px 20px ${currentColor.light}, 8px 8px 25px rgba(0,0,0,0.4)`,
+                              transform: 'perspective(200px) rotateY(-5deg)',
+                              transformStyle: 'preserve-3d'
+                            }}
+                          >
+                            <div 
+                              className="absolute bottom-0 left-0 w-full h-8 rounded-b-2xl"
+                              style={{
+                                background: `linear-gradient(135deg, ${currentColor.cap} 0%, ${currentColor.main} 100%)`,
+                                border: `2px solid ${currentColor.secondary}`,
+                                boxShadow: `0 4px 15px rgba(0,0,0,0.4), inset 0 -4px 8px rgba(0,0,0,0.2)`,
+                                transform: 'translateZ(5px)'
+                              }}
+                            ></div>
+                          </div>
+                          
+                          {/* Bottom 3D Pipe */}
+                          <div 
+                            className="absolute rounded-t-3xl"
+                            style={{
+                              left: `${obstacle.x}px`,
+                              top: `${obstacle.gapBottom}px`,
+                              width: `${OBSTACLE_WIDTH}px`,
+                              height: `${600 - obstacle.gapBottom}px`,
+                              background: `linear-gradient(135deg, ${currentColor.light} 0%, ${currentColor.main} 40%, ${currentColor.secondary} 70%, ${currentColor.shadow} 100%)`,
+                              border: `4px solid ${currentColor.border}`,
+                              boxShadow: `inset -8px -4px 20px rgba(0,0,0,0.3), inset 4px 4px 20px ${currentColor.light}, 8px 8px 25px rgba(0,0,0,0.4)`,
+                              transform: 'perspective(200px) rotateY(-5deg)',
+                              transformStyle: 'preserve-3d'
+                            }}
+                          >
+                            <div 
+                              className="absolute top-0 left-0 w-full h-8 rounded-t-2xl"
+                              style={{
+                                background: `linear-gradient(135deg, ${currentColor.cap} 0%, ${currentColor.main} 100%)`,
+                                border: `2px solid ${currentColor.secondary}`,
+                                boxShadow: `0 -4px 15px rgba(0,0,0,0.4), inset 0 4px 8px rgba(0,0,0,0.2)`,
+                                transform: 'translateZ(5px)'
+                              }}
+                            ></div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* 3D Bananas */}
+                    {cheeses.filter(cheese => !cheese.collected).map((cheese, index) => (
+                      <div 
+                        key={index}
+                        className="absolute text-3xl"
+                        style={{
+                          left: `${cheese.x}px`,
+                          top: `${cheese.y}px`,
+                          transform: 'perspective(100px) rotateY(15deg) rotateX(10deg) translateZ(5px)',
+                          filter: 'drop-shadow(3px 3px 6px rgba(0,0,0,0.4))',
+                          animation: 'float 2s ease-in-out infinite'
+                        }}
+                      >
+                        🍌
+                      </div>
+                    ))}
+
+                    {/* Game States - Enhanced 3D */}
+                    {gameState === 'waiting' && (
+                      <div className="absolute inset-0 flex items-center justify-center" style={{
+                        background: 'linear-gradient(135deg, rgba(0,0,0,0.8) 0%, rgba(20,20,20,0.9) 100%)',
+                        backdropFilter: 'blur(15px)'
+                      }}>
+                    
+                    
+
+                        <div className="text-center text-orange-400 p-12 rounded-3xl" style={{
+                          background: 'linear-gradient(135deg, rgba(0,0,0,0.9) 0%, rgba(20,20,20,0.95) 100%)',
+                          border: '4px solid #f59e0b',
+                          boxShadow: '0 20px 60px rgba(245,158,11,0.3), inset 0 4px 20px rgba(255,255,255,0.1)',
+                          backdropFilter: 'blur(20px)'
+                        }}>
+                          
+                          {/* GAME LOGO (Waiting Centered) */}
+                          
+<div className="flex justify-center mb-6">
+  <img 
+    src="https://i.postimg.cc/wvT7bTPz/Chat-GPT-Image-27-Agu-2025-15-03-15.png" 
+    alt="Banana Hunt Logo"
+    style={{
+      width: '180px',
+      height: 'auto',
+      pointerEvents: 'none',
+      filter: 'drop-shadow(2px 2px 6px rgba(0,0,0,0.6))', animation: 'pulse 2.5s infinite'
+    }}
+  />
+</div>
+
+<h2 className="text-2xl font-bold mb-4 drop-shadow-2xl" style={{ 
+                            fontFamily: 'Orbitron, sans-serif',
+                            textShadow: '0 0 20px rgba(245,158,11,0.9), 2px 2px 4px rgba(0,0,0,0.8)',
+                            animation: 'glow 2s ease-in-out infinite'
+                          }}>
+                            BANANA HUNT
+                          </h2>
+                          <div className="text-8xl mb-6" style={{ animation: 'float 3s ease-in-out infinite' }}>
+                            <div className="inline-block transform scale-125 mr-4">
+                              {monkeyDesigns[selectedMonkey].render()}
+                            </div>
+                            🍌
+                          </div>
+                          <p className="text-2xl mb-4 drop-shadow-lg text-amber-400">CLICK OR PRESS SPACE!</p>
+                          <p className="text-xl mb-4 drop-shadow-lg text-orange-300">COLLECT BANANAS, AVOID OBSTACLES!</p>
+                          <p className="text-lg text-orange-500 mb-6 drop-shadow-lg" style={{animation: 'blink 1s infinite'}}>LEVEL UP EVERY 25 POINTS!</p>
+                          <button 
+                            onClick={() => initGame()}
+                            className="px-8 py-3 text-xl font-bold rounded-2xl transition-all duration-300 transform hover:scale-110 hover:-translate-y-2"
+                            style={{
+                              background: 'linear-gradient(135deg, #f59e0b 0%, #ea580c 100%)',
+                              color: '#3a1f00',
+                              border: '3px solid #f59e0b',
+                              boxShadow: '0 10px 30px rgba(245,158,11,0.4), inset 0 2px 10px rgba(255,255,255,0.2)',
+                              textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                            }}
+                          >
+                            START GAME
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {gameState === 'gameOver' && showScoreForm && (
+                      <div className="absolute inset-0 flex items-center justify-center" style={{
+                        background: 'linear-gradient(135deg, rgba(153,27,27,0.8) 0%, rgba(220,38,38,0.9) 100%)',
+                        backdropFilter: 'blur(15px)'
+                      }}>
+                        <div 
+                          className="text-center text-orange-400 p-10 rounded-3xl max-w-lg"
+                          style={{
+                            background: 'linear-gradient(135deg, rgba(0,0,0,0.9) 0%, rgba(20,20,20,0.95) 100%)',
+                            border: '4px solid #f59e0b',
+                            boxShadow: '0 20px 60px rgba(245,158,11,0.3), inset 0 4px 20px rgba(255,255,255,0.1)',
+                            backdropFilter: 'blur(20px)'
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <h2 className="text-4xl font-bold mb-6 text-amber-400 drop-shadow-2xl" style={{ 
+                            textShadow: '0 0 20px rgba(255,193,7,0.8), 2px 2px 4px rgba(0,0,0,0.8)',
+                            animation: 'glow 2s ease-in-out infinite'
+                          }}>
+                            SAVE SCORE!
+                          </h2>
+                          <div className="text-2xl mb-8">
+                            <p className="text-orange-500 mb-4 text-3xl drop-shadow-lg">GAME OVER!</p>
+                            <p className="drop-shadow-lg">TOTAL: <span className="text-amber-400 font-bold text-3xl">{finalScore + finalCheeseScore}</span></p>
+                            <p className="text-lg mt-2 opacity-80">Obstacle: {finalScore} | Banana: {finalCheeseScore} | Level: {finalLevel}</p>
+                          </div>
+                          
+                          <div className="space-y-6">
+                            <input
+                              type="text"
+                              value={userBitcoinAddress}
+                              onChange={(e) => setUserBitcoinAddress(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              placeholder="Bitcoin Taproot Address"
+                              className="w-full px-4 py-3 text-lg rounded-xl border-2 transition-all duration-200 focus:scale-105"
+                              style={{
+                                background: 'rgba(30,30,30,0.9)',
+                                borderColor: '#666',
+                                color: '#f59e0b',
+                                boxShadow: '0 5px 15px rgba(0,0,0,0.3), inset 0 2px 5px rgba(255,255,255,0.1)'
+                              }}
+                            />
+                            
+                            <input
+                              type="text"
+                              value={userTwitterHandle}
+                              onChange={(e) => setUserTwitterHandle(e.target.value)}
+                              onClick={(e) => e.stopPropagation()}
+                              placeholder="Twitter Handle"
+                              className="w-full px-4 py-3 text-lg rounded-xl border-2 transition-all duration-200 focus:scale-105"
+                              style={{
+                                background: 'rgba(30,30,30,0.9)',
+                                borderColor: '#666',
+                                color: '#f59e0b',
+                                boxShadow: '0 5px 15px rgba(0,0,0,0.3), inset 0 2px 5px rgba(255,255,255,0.1)'
+                              }}
+                            />
+                            
+                            <div className="flex space-x-4">
+                              <button
+                                onClick={handleScoreSubmit}
+                                className="flex-1 px-6 py-3 font-bold text-lg rounded-xl transition-all duration-300 transform hover:scale-105 hover:-translate-y-1"
+                                style={{
+                                  background: 'linear-gradient(135deg, #f59e0b 0%, #ea580c 100%)',
+                                  color: '#3a1f00',
+                                  border: '3px solid #f59e0b',
+                                  boxShadow: '0 8px 25px rgba(245,158,11,0.4), inset 0 2px 8px rgba(255,255,255,0.2)',
+                                  textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                                }}
+                              >
+                                SAVE
+                              </button>
+                              <button
+                                onClick={handleSkipSubmission}
+                                className="flex-1 px-6 py-3 font-bold text-lg rounded-xl transition-all duration-300 transform hover:scale-105 hover:-translate-y-1"
+                                style={{
+                                  background: 'linear-gradient(135deg, #6b7280 0%, #4b5563 100%)',
+                                  color: '#f3f4f6',
+                                  border: '3px solid #6b7280',
+                                  boxShadow: '0 8px 25px rgba(107,114,128,0.4), inset 0 2px 8px rgba(255,255,255,0.2)',
+                                  textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                                }}
+                              >
+                                SKIP
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {gameState === 'gameOver' && !showScoreForm && (
+                      <div 
+                        className="absolute inset-0 flex items-center justify-center"
+                        style={{
+                          background: 'linear-gradient(135deg, rgba(153,27,27,0.8) 0%, rgba(220,38,38,0.9) 100%)',
+                          backdropFilter: 'blur(15px)'
+                        }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (e.target === e.currentTarget) {
+                            initGame();
+                          }
+                        }}
+                      >
+                        <div className="text-center text-orange-500 p-12 rounded-3xl" style={{
+                          background: 'linear-gradient(135deg, rgba(0,0,0,0.9) 0%, rgba(20,20,20,0.95) 100%)',
+                          border: '4px solid #ef4444',
+                          boxShadow: '0 20px 60px rgba(239,68,68,0.3), inset 0 4px 20px rgba(255,255,255,0.1)',
+                          backdropFilter: 'blur(20px)'
+                        }}>
+                          
+                          {/* GAME LOGO (Waiting Centered) */}
+                          <div className="flex justify-center mb-6">
+                            
+                          </div>
+<h2 className="text-5xl font-bold mb-6 drop-shadow-2xl" style={{ 
+                            textShadow: '0 0 20px rgba(239,68,68,0.8), 2px 2px 4px rgba(0,0,0,0.8)',
+                            animation: 'glow 2s ease-in-out infinite'
+                          }}>
+                            GAME OVER
+                          </h2>
+                          <div className="text-8xl mb-6 drop-shadow-2xl" style={{ animation: 'float 3s ease-in-out infinite' }}>💀</div>
+                          <p className="text-3xl mb-4 drop-shadow-lg">TOTAL: {finalScore + finalCheeseScore}</p>
+                          <p className="text-2xl mb-6 drop-shadow-lg">LEVEL: {finalLevel}</p>
+                          <p className="text-2xl mb-8 drop-shadow-lg" style={{animation: 'blink 1s infinite'}}>CLICK TO PLAY AGAIN!</p>
+                          
+                          <div className="flex justify-center">
+                            <button 
+                              onClick={() => setShowLeaderboard(!showLeaderboard)}
+                              className="px-8 py-4 font-bold text-lg rounded-2xl transition-all duration-300 transform hover:scale-110 hover:-translate-y-2"
+                              style={{
+                                background: 'linear-gradient(135deg, #f59e0b 0%, #ea580c 100%)',
+                                color: '#3a1f00',
+                                border: '3px solid #f59e0b',
+                                boxShadow: '0 10px 30px rgba(245,158,11,0.4), inset 0 2px 10px rgba(255,255,255,0.2)',
+                                textShadow: '1px 1px 2px rgba(0,0,0,0.5)'
+                              }}
+                            >
+                              LEADERBOARD
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Instructions */}
+            {gameState !== 'characterSelect' && (
+              <div className="mt-6 text-center p-4 rounded-2xl" style={{
+                background: 'linear-gradient(135deg, rgba(0,0,0,0.8) 0%, rgba(20,20,20,0.9) 100%)',
+                border: '2px solid #f59e0b',
+                boxShadow: '0 10px 30px rgba(245,158,11,0.2), inset 0 2px 10px rgba(255,255,255,0.1)',
+                backdropFilter: 'blur(10px)'
+              }}>
+                <p className="text-base text-orange-300 drop-shadow-lg font-semibold">[CLICK] OR [SPACE] = JUMP | [BANANA] = +1 POINT | [EVERY 25 POINTS] = LVL UP!</p>
+                <p className="text-sm mt-1 text-purple-300 drop-shadow-lg"></p>
+                <p className="text-sm mt-1 text-cyan-300 drop-shadow-lg">[SAVE YOUR SCORE: BITCOIN ADDRESS + TWITTER HANDLE]</p>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<MouseHuntGame />);
+  </script>
+</body>
+</html>
